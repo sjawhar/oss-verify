@@ -221,7 +221,7 @@ class Binaries(Project):
     def test_a_plain_text_section_over_the_size_rule_gets_one_warning(self):
         """1,000,000 bytes of .text pass the size check without a person; one byte more is warned about, for the plain
         build only, and the check still passes."""
-        for size, warned in ((check_tool.TEXT_LIMIT, False), (check_tool.TEXT_LIMIT + 1, True)):
+        for size, warned in ((1_000_000, False), (1_000_001, True)):
             with self.subTest(size=size):
                 code, _, errors, rows, _ = self.check([], elf(symtab=False, sections=[(".text", size)],
                                                               segments=[PT_LOAD]))
