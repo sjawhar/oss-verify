@@ -1,0 +1,13 @@
+# omx-clap-core: the CLAP and LV2 plugin host core of FreeMixer. The fuzz targets drive the readers of bytes from disk
+# that the host parses itself: the preset file (JSON), the base64 state body it carries, and the manifest.ttl of each LV2
+# bundle. Pinned to the head of FreeMixer/omx-clap-core#346, the fuzz/ that carries a record on every check.
+repo: https://github.com/FreeMixer/omx-clap-core#99f8c901fa06efb83493c3f10c665d50538da495
+primary_contact: linuxnow@gmail.com
+homepage: https://github.com/FreeMixer/omx-clap-core
+language: c
+sanitizers: [address, undefined]
+mutants: fuzz/sabotage
+fuzz_targets:
+  - fuzz_preset
+  - fuzz_state
+  - fuzz_manifest
