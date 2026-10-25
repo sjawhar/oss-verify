@@ -21,6 +21,7 @@ The field names come from OSS Scanner if it has the field, then from OSS-Fuzz. W
 | `sanitizers` | no | the sanitizer builds in addition to `plain` | `[address, undefined]` |
 | `ubsan_checks` | no | changes to the UBSan checks of the `ubsan` and `asan-ubsan` builds, with the next toolchain version ([below](#ubsan_checks)) | none: the checks that OSS-Fuzz makes fatal, for the project's language |
 | `fuzz_targets` | no | the fuzz targets to verify | each fuzz target that the build makes |
+| `mutants` | no | the directory of the breakage patches, from the `WORKDIR` of the `Dockerfile` ([below](#mutants)) | none |
 | `patch_style` | no | the path of your `patch_style.md` in your repository ([below](#patch_style)) | |
 | `budgets` | no | the memory budgets of the statements | today's values |
 | `proofs` | no | where we publish the proofs ([below](#proofs)) | the proofs repository |
@@ -140,6 +141,22 @@ Give the names of the fuzz targets that `build.sh` puts in `$OUT`. If you do not
 
 The manifest and the lock record the list that a build used. Thus "each fuzz target" cannot change what a proof is about without a record. A build that does not make a fuzz target in this list fails.
 
+### mutants
+
+Give the directory that holds breakage patches of your fuzz targets: changes to the library or to a fuzz target that make a check fail on an input in the seed corpus. A one-line change is usually a `mutant:` record in the check's comment instead, and a project can use both ([.claude/skills/add-project/SKILL.md](../.claude/skills/add-project/SKILL.md), step 3.4). The path starts at the `WORKDIR` of the `Dockerfile`, where `build.sh` runs. For a `Dockerfile` that fetches your repository into `$SRC/<name>` and works there, it is a directory of your repository, for example `fuzz/mutants`.
+
+Each file in the directory whose name ends in `.patch` is one breakage patch, as `git diff` writes it, with paths from that `WORKDIR`. Before its `diff --git` line, write which check it breaks and the seed input that catches it. `git apply` ignores that text. For example:
+
+```
+Breaks the check of fuzz/fuzz_ctrl.c:91 (an 0x8819 frame of 50 bytes or more is parsed as REAC).
+Caught by the seed input "breakages" of fuzz_ctrl.
+
+diff --git a/src/reac_ctrlblk.c b/src/reac_ctrlblk.c
+...
+```
+
+The Build check of each enrollment pull request applies each patch in turn, builds again, and runs each fuzz target on each input of its seed corpus. It reports each patch that no input catches, and each check that no breakage, record or patch, makes fire ([build-contract.md](build-contract.md#the-checks-of-a-fuzz-target)). A breakage patch is never applied to a binary that we prove things about.
+
 ### patch_style
 
 Give the path of your `patch_style.md` in your repository. Do not use this field if `patch_style.md` is in the project directory.
@@ -198,14 +215,15 @@ With each value, we hold back each statement that shows a finding that is not pu
 
 We seeded some projects ourselves. A project whose proofs we publish in [oss-verify-proofs](https://github.com/theorem-labs/oss-verify-proofs) is in `projects/<name>/`. Each other one is in [tools/seeds/](../tools/seeds/)`<name>/`: its `project.yaml`, and its build files if it has any. We used the build data of the oss-fuzz-theorems 2026.10 release. A seeded project has `primary_contact: n/a`. Its `project.yaml` starts with two comment lines that tell that we seeded it. `tools/validate.py` warns about `n/a`, and the triage comment on a pull request shows it.
 
-We seeded the projects of OSS-Fuzz, at its commit `bd2ce21991a94a362b92fb1bf25f86d5a1a60842`, that our builder can build and that we can describe honestly. A seeded `project.yaml` gives only what the recorded build data tells, and no guess. [seeded-projects.tsv](seeded-projects.tsv) lists each of the 1,381 projects of OSS-Fuzz at that commit. For a project that we did not seed, it gives the reason.
+From [this commit of OSS-Fuzz](https://github.com/google/oss-fuzz/tree/bd2ce21991a94a362b92fb1bf25f86d5a1a60842), we seeded each project that our builder can build and that we can describe honestly. A seeded `project.yaml` gives only what the recorded build data tells, and no guess. [seeded-projects.tsv](seeded-projects.tsv) lists each of the 1,381 projects of OSS-Fuzz at that commit. For a project that we did not seed, it gives the reason.
 
 A core maintainer can adopt a seeded project:
 
 1. Copy its `projects/<name>/`, or its `tools/seeds/<name>/`, to `projects/<name>/` in a branch of your fork.
-2. Set `primary_contact` to the address that gets findings.
-3. Remove the two comment lines.
-4. Do the steps in the [README](../README.md#enroll-a-project) from step 3.
+2. Remove each patch that fixes a bug. The directory of a seeded project whose proofs we publish can hold such a patch, but the directory of an enrolled project cannot ([above](#build-patches)). For each one, delete the patch file, its line in `series`, its `patch` line in `sources`, and its name where the `Dockerfile` or `build.sh` copies or applies it. `lay-out-sources` applies each `patch` line of `sources` in turn, and stops when those lines are not the patches that `series` lists, in the same order. So keep the patches that remain in their order in both files.
+3. Set `primary_contact` to the address that gets findings.
+4. Remove the two comment lines.
+5. Do the steps in the [README](../README.md#enroll-a-project) from step 3.
 
 The build files of a seeded project come from the build recipe of that release. They make that release's binaries again, byte for byte. Keep them, or write your own. If a seeded project has no build files, [seeded-projects.tsv](seeded-projects.tsv) tells why. Add a `Dockerfile` and a `build.sh` before you open the pull request.
 
@@ -217,7 +235,7 @@ The build files of a seeded project come from the build recipe of that release. 
 | `build.sh` | with a `Dockerfile` in the project directory |
 | `patch_style.md` | optional, if `patch_style` is not set |
 | fuzz target sources | optional: your own fuzz targets and their helpers, with the suffixes of your language ([above](#language)) |
-| `*.patch` and `series` | optional: build patches |
+| `*.patch` and `series` | optional: patches ([below](#build-patches)) |
 | `sources` | optional: other source trees and files of the build, each pinned by commit or SHA-256 ([build-contract.md](build-contract.md#builds-ported-from-oss-fuzz-theorems)) |
 | a file that `sources` copies or reads | optional: a file that the build needs, under any name, for example the `Cargo.lock` of a Rust fuzz target or the `go.lock` of a Go project |
 | `<target>_seed_corpus.zip` | optional: example inputs of the fuzz target `<target>` ([below](#seed-corpora)) |
@@ -235,9 +253,9 @@ A seed corpus is a zip file of example inputs of one fuzz target. Together, its 
 
 ### Build patches
 
-`series` lists the build patches, one file name on each line, in the order in which we apply them. We ignore empty lines and lines that start with `#`. List each patch exactly once.
+`series` lists each patch that the build applies, one file name on each line, in order. We ignore empty lines and lines that start with `#`. List each patch exactly once.
 
-A build patch can only change how the project builds. For example, it can make the build static, set up cross-compilation, correct a version stamp or make a generated file. A change that fixes a bug is not a build patch. It never goes in the project directory. We send it to you as a patch, with its finding ([what-gets-proven.md](what-gets-proven.md#findings)).
+A patch of an enrolled project can only change how the project builds. For example, it can make the build static, set up cross-compilation, correct a version stamp or make a generated file. A change that fixes a bug never goes in the directory of your project. We send it to you as a patch, with its finding ([what-gets-proven.md](what-gets-proven.md#findings)). If a proof needed that patch, we publish the patch with the proof ([what-gets-proven.md](what-gets-proven.md#publishing)). Only the directory of a seeded project whose proofs we publish can hold such a patch ([build-contract.md](build-contract.md#build-patches)).
 
 ### Rules for each file
 

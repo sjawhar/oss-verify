@@ -14,6 +14,8 @@ We accept an established open-source project ([theorem.dev/oss-verify](https://t
 5. Our builder can build the project. The [language table](docs/project-yaml.md#language) tells which languages it builds today.
 6. The enrollment names, in `primary_contact`, the one address that gets findings.
 
+A project of any size can enroll. Because of our capacity, we are most likely to respond quickly to a project in C whose plain binaries (`<target>.plain`) are statically linked and have less than 1 MB of `.text`, the size that `tools/check` shows. If your organisation wants to help us increase that capacity, so that we can take on more projects now, write to [oss-verify@theorem.dev](mailto:oss-verify@theorem.dev). We are interested in corporate partners and sponsorship.
+
 We seeded some projects already, and a maintainer can adopt one ([docs/project-yaml.md](docs/project-yaml.md#seeded-projects)).
 
 ## Enroll with a coding agent
@@ -33,7 +35,7 @@ The agent asks you what "correct" means for your code, and which findings and pa
 
 > **WARNING:** `tools/check` builds the project's `Dockerfile` with network access. Use it only on a project that you trust ([SECURITY.md](SECURITY.md)).
 
-You need a Linux x86-64 machine with Docker, git, and Python 3 with PyYAML (on Ubuntu, `apt install python3-yaml`), and about 10 GB of free disk. The first run of `tools/check` downloads a toolchain image of about 1.1 GB, which unpacks to about 5 GB.
+You need a Linux x86-64 machine with Docker and its buildx plugin, git, and Python 3 with PyYAML (on Ubuntu, `apt install docker.io docker-buildx python3-yaml`), and about 10 GB of free disk. The first run of `tools/check` downloads a toolchain image of about 1.1 GB, which unpacks to about 5 GB.
 
 1. Fork this repository.
 2. Make `projects/<name>/` from [templates/](templates/): `project.yaml` ([docs/project-yaml.md](docs/project-yaml.md)), a `Dockerfile` and a `build.sh` ([docs/build-contract.md](docs/build-contract.md)).

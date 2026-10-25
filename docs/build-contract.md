@@ -13,7 +13,7 @@ An OSS-Fuzz `Dockerfile` and `build.sh` do not run here without changes. They ex
 1. Make the builder image from [infra/base-builder/](../infra/base-builder/), from a toolchain image ([below](#toolchains)).
 2. Build the project image from the project's `Dockerfile`, on the builder. `tools/check` gives the build arguments `COMMIT` (the full commit that `repo#ref` names), `REPO` and `BASE_BUILDER`. Only this step has network access.
 3. Run `compile` in a new container of the project image, with no network (`docker run --network=none`). Do this once for each build that `project.yaml` asks for: `plain`, `ubsan`, `asan` and `asan-ubsan`. `compile` sets the compilers and flags of the build and runs `$SRC/build.sh`.
-4. Find the fuzz targets in the `$OUT` of each build. Copy each binary to `out/<target>/<target>.<build>`. Write the manifest, with the SHA-256 of each binary. `tools/check` lists each binary with its size, the size of its `.text` section, `static` or `dynamic`, and its SHA-256. With `--summary <file>`, it also writes this list as a Markdown table; the Build check of a pull request shows that table. A binary with a `PT_INTERP` or `PT_DYNAMIC` program header is dynamically linked. `tools/check` refuses a dynamically linked binary, and one whose program headers it cannot read, with exit status 2, the status for a project that breaks the enrollment rules.
+4. Find the fuzz targets in the `$OUT` of each build. Copy each binary to `out/<target>/<target>.<build>`. Write the manifest, with the SHA-256 of each binary. `tools/check` lists each binary with its size, the size of its `.text` section, `static` or `dynamic`, and its SHA-256. With `--summary <file>`, it also writes this list as a Markdown table; the Build check of a pull request shows that table. A binary with a `PT_INTERP` or `PT_DYNAMIC` program header is dynamically linked. `tools/check` refuses a dynamically linked binary, and one whose program headers it cannot read, with exit status 2, the status for a project that breaks the enrollment rules. Size is not a rule: a binary of any size passes. Because of our capacity, we are most likely to respond quickly to a project in C whose plain binaries have less than 1 MB of `.text` ([README](../README.md#who-can-enroll)).
 
 ## The builder
 
@@ -30,7 +30,7 @@ Each binary is a static riscv64 Linux program for RV64G (`-march=rv64g -mabi=lp6
 
 ## Static riscv64 programs
 
-The statements use a formal model of a riscv64 Linux process ([what-gets-proven.md](what-gets-proven.md#the-statements)). A statement is about each byte of the program. A static program holds all of its code: the library, the fuzz target, the driver and the C library. Thus no code from outside the binary runs.
+The statements use [Linux Process Semantics (LPS)](https://github.com/theorem-labs/rocq-linux-process-semantics), a formal model of a riscv64 Linux process ([what-gets-proven.md](what-gets-proven.md#the-statements)). A statement is about each byte of the program. A static program holds all of its code: the library, the fuzz target, the driver and the C library. Thus no code from outside the binary runs.
 
 ## Toolchains
 
@@ -76,6 +76,8 @@ These are the common compile flags:
 
 The `-fno-builtin-*` flags keep each allocation an ordinary call in all four builds. Thus the optimizer cannot remove or merge an allocation in one build and keep it in a different build.
 
+`compile` builds the driver with these flags and `-fno-plt`. clang does not use `-fno-plt` for this target. Thus each C, C++, Rust and Python build writes `warning: argument unused during compilation: '-fno-plt'` seven times, before `build.sh` starts. You can ignore this warning. `$CFLAGS` does not have `-fno-plt`.
+
 | build | `$SANITIZER` | sanitizer flags | a detected error |
 |---|---|---|---|
 | `plain` | `none` | none | none |
@@ -107,6 +109,20 @@ The sealed AddressSanitizer runtime has these properties, as the documentation o
 * At start, it reserves more than 100 GiB of address space. Under a limit such as `ulimit -v`, the reservation fails and the program waits forever.
 
 The driver is compiled with no sanitizer flags in each build. The library and the fuzz targets get the flags of the build. In each build, `getenv()` returns NULL, `getpid()` and `getppid()` return 1, and `mkstemp()` and the related functions use a fixed name in the current directory. Thus a program depends only on its input file.
+
+### Functions that the AddressSanitizer runtime wraps
+
+The sealed AddressSanitizer runtime intercepts functions through the linker's `--wrap` option. Each `asan` and `asan-ubsan` link gets `-Wl,--wrap=<function>` for each function on the runtime's list, and the runtime defines `__wrap_<function>` for them (for example `__wrap_fopen`). The list in the toolchain image has 380 functions. The builder removes `iconv` from it, so the links wrap 379 functions. `fopen`, `time`, `clock_gettime` and `dlopen` are on the list.
+
+Thus do not link with `-Wl,--wrap=<function>` for a function on the list, and do not define `__wrap_<function>` for it. If you define `__wrap_<function>`, two objects define it, and the link of the AddressSanitizer builds fails. To replace a function on the list, rename the call when you compile. This method works in all four builds:
+
+* Compile the file that calls the function with `-D<function>=<name>`, for example `-Dfopen=my_fopen`. `-D` changes each use of the name in that file and in the headers that it includes. Thus use it only in a C file, and only for a name that has no other meaning there.
+* Define `my_fopen` in your fuzz target. In a C++ fuzz target, define it with `extern "C"`.
+* If the library's archive also has that file, compile a second copy of it for this fuzz target only. Use the flags and include paths of the library's own compile of that file, and add `-D`. Link the copy before the archive. Then the other fuzz targets do not need `my_fopen`.
+
+The list is a file in the toolchain image: `/opt/asan-static-rt/lib/clang/20/lib/riscv64-unknown-linux-musl/libclang_rt.asan.a.wrap`. Each `--wrap=<function>` line names one function. To read it, run `docker run --rm --entrypoint cat <image> <path>`, with the image from [infra/toolchains.tsv](../infra/toolchains.tsv). [infra/base-builder/toolchain.sh](../infra/base-builder/toolchain.sh) removes the `--wrap=iconv` line.
+
+The driver's seals also use `--wrap`, in all four builds: `getenv`, `getpid`, `getppid`, `mkstemp`, `mkostemp`, `mkstemps` and `mkostemps`. `link-fuzz-target` adds them to each link. In a `build.sh` that you write by hand, do not wrap these functions, and do not define `__wrap_<function>` for them. If a link wraps `getenv`, `getpid` or `mkstemp` itself, `link-fuzz-target` adds none of the seals, and the program can then depend on its environment, its process id and the names of its temporary files. A build ported from oss-fuzz-theorems adds the same seals with the `oft_seal_*` helpers of `recipes.sh`. Keep those calls.
 
 ## What the Dockerfile must do
 
@@ -275,10 +291,31 @@ A proof is only as strong as its fuzz target. Thus each fuzz target must obey th
 
 * Each property is a check that calls `abort()`, not an `assert()`, which `NDEBUG` removes.
 * A seed corpus runs each API call and each property check at least once ([project-yaml.md](project-yaml.md#seed-corpora)).
-* For each property, a one-line change to the code makes the fuzz target abort on a recorded input.
+* For each property, a one-line change to the code makes the fuzz target abort on an input of the seed corpus. The change is a `mutant:` record in the check's comment, or a patch in the directory that `mutants` names ([below](#the-checks-of-a-fuzz-target), [project-yaml.md](project-yaml.md#mutants)).
 * Each count, size and loop that comes from the input has a bound.
 * A run depends only on its input: no threads, clock, random numbers, network, environment or other files.
 * `LLVMFuzzerTestOneInput` returns -1 only for a failed expectation that the input chooses, or for an input outside the domain of a property. In all other cases, it returns 0. It never returns -1 for a failed property, and it never calls `exit()` or `_exit()` ([above](#what-the-driver-does-not-intercept)).
+
+## The checks of a fuzz target
+
+`tools/check --checks <file>` measures the second and third rules above for a C or C++ project, on the inputs of its seed corpora, and writes a report in Markdown. The Build check of each enrollment pull request runs it and shows the report in its step summary and in its comment on the pull request. What it finds changes no exit status. It does these steps:
+
+1. **A coverage build.** It builds the `plain` build again, with `-O0 -fprofile-instr-generate -fcoverage-mapping`, with LLVM's profile runtime, and with `abort()` wrapped so that the profile is written before the program aborts. The toolchain image has no profile runtime, so `tools/check` downloads compiler-rt's source for the toolchain's LLVM version once, checks its SHA-256, and compiles the runtime in the build's container ([tools/checks/compile-check](../tools/checks/compile-check)).
+2. **The runs.** It runs each fuzz target on each input of its seed corpus, with the six-byte header in front ([above](#the-driver)), with `qemu-riscv64-static` in a container of the project image with no network ([tools/checks/run-seeds](../tools/checks/run-seeds)). A run that does not end in 120 seconds counts as a failure. The inputs also run on the project's most checking sanitizer build: `asan-ubsan`, else `asan`, else `ubsan`.
+3. **The checks.** A check is a call of `abort()` in a file that defines `LLVMFuzzerTestOneInput`, or in another file of its directory. Its guard is what decides whether it runs: the condition of the `if`, `while` or `for` of which it is the body (also through `else`, and also after other statements of the block), or the `switch` of a `case` or `default` label. A check is reached when a run evaluates its guard. The report lists each check that no input reaches. It lists apart, and does not measure, an `abort()` that nothing guards, one inside an expression, and one in a macro definition.
+4. **The breakages.** A breakage is a change to the code that must make a check fire. There are two kinds, and a project can use both:
+   - **A record in the check's comment** (step 3.4 of the add-project skill), one or more pairs of lines:
+
+         mutant: <path>:<line> `<old>` -> `<new>`
+         input: <file name in the seed corpus>
+
+     `<path>` starts at the `WORKDIR` of the `Dockerfile`, and `<line>` is its line at the built commit, after the `Dockerfile` copies the project's files in. `<old>` occurs once on that line, and the change replaces it with `<new>`, which can be empty. The record is met when its input fails with the change, and passes without it.
+   - **A patch in the `mutants` directory** ([project-yaml.md](project-yaml.md#mutants)). A patch is caught when any seed input that passes without it fails with it.
+
+   For each breakage, it makes the coverage build with the change and runs the inputs: a record's own input, or every input for a patch. If no run failed, it also makes the sanitizer build with the change and runs the inputs on it. A run fails when it exits with a status other than 0 and 2. A run that does not end within 120 seconds counts as neither a pass nor a failure. The coverage build also shows which checks fired. The breakages build in parallel, for at most `--checks-budget` minutes (60 by default). The report lists each record that is not met, each patch that no input catches, each breakage that does not apply or build, each one that the budget left unchecked, and each check that no breakage makes fire. A patch is applied with `git apply` in the `WORKDIR`, and can change only files under it.
+5. **Not a property.** A stop that is not a property, for example `if (!buf) abort();` after a failed allocation, has one line `not a property: <reason>` in its comment, in place of the records. It needs no input and no breakage. The report lists it with its reason, for the review.
+
+It needs `qemu-riscv64-static` on `PATH`, and compiler-rt's source from GitHub on the first run. On Ubuntu 24.04, take qemu out of its package, and do not install it, because the package registers qemu with the kernel for riscv64 programs: `apt-get download qemu-user-static && dpkg-deb -x qemu-user-static_*.deb <directory>`, then add `<directory>/usr/bin` to `PATH`.
 
 ## Go fuzz targets
 
@@ -290,7 +327,7 @@ A `go.lock` in the project directory pins the modules. It has one row for each `
 
 These items are different from a Go fuzz target in OSS-Fuzz:
 
-* The build uses a patched Go runtime. The patches are an overlay of the standard library (the `-overlay` flag of `go build`), and a rebuilt compiler. The Go toolchain itself does not change. The patches remove what the process model does not have: signal handlers, the second thread of the scheduler, reads of the environment, of `/proc` and of `/sys`, and the vector instructions of riscv64. They also give the exit statuses below.
+* The build uses a patched Go runtime. The patches are an overlay of the standard library (the `-overlay` flag of `go build`), and a rebuilt compiler. The Go toolchain itself does not change. The patches remove what LPS does not have: signal handlers, the second thread of the scheduler, reads of the environment, of `/proc` and of `/sys`, and the vector instructions of riscv64. They also give the exit statuses below.
 * A load through a nil pointer is a segmentation fault (status 139), not a panic, because the runtime installs no signal handler. A statement counts 139 as a failure, as it counts a panic.
 * A panic, a runtime error, and `t.Fatal`, `t.Error` or `t.Fail` in a fuzz test exit with status 79. In OSS-Fuzz, they crash the fuzz target.
 * `os.Exit` during a call of the fuzz target exits with status 77.
@@ -395,4 +432,6 @@ We checked each port with `tools/check --lock`, against each `harness.yaml` of t
 
 ## Build patches
 
-A build patch in the project directory can only change how the project builds: static linking, cross-compilation, a version stamp or a generated file. `series` lists the build patches in the order of application. A change that fixes a bug is not a build patch. It never goes in the project directory. We send it to the project as a patch, with its finding ([what-gets-proven.md](what-gets-proven.md#findings)).
+`series` lists each patch that the build applies, one time each, in order. In a ported build, `lay-out-sources` applies each `patch` line of `sources`, and stops when those lines are not the patches that `series` lists, in the same order.
+
+A patch of an enrolled project can only change how the project builds: static linking, cross-compilation, a version stamp or a generated file. A change that fixes a bug never goes in the directory of an enrolled project. We send it to the project as a patch, with its finding ([what-gets-proven.md](what-gets-proven.md#findings)). If a proof needed that patch, we publish the patch with the proof ([what-gets-proven.md](what-gets-proven.md#publishing)). The directory of a seeded project whose proofs we publish can also hold a patch that fixes a bug, once the finding of that bug is public. A proof can then be about the build with the fix. The facts list each such patch ([what-gets-proven.md](what-gets-proven.md#publishing)).

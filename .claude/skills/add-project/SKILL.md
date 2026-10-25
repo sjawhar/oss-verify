@@ -11,6 +11,8 @@ The result is one directory, `projects/<name>/`, and a pull request that the mai
 
 Before you start, read these documents: `README.md`, `docs/project-yaml.md`, `docs/build-contract.md`, `docs/what-gets-proven.md` and, for API-level fuzz targets, `docs/dsl.md`. Work only in `projects/<name>/`.
 
+A project of any size can enroll. Tell the maintainer what the README says in "Who can enroll": because of our capacity, we are most likely to respond quickly to a project in C whose plain binaries (`<target>.plain`) are statically linked and have less than 1 MB of `.text`, and an organisation that wants to help us take on more projects can write to oss-verify@theorem.dev.
+
 You need what the README's "Enroll a project" lists for `tools/check`. Steps 3.3 and 3.4 also need a native clang with libFuzzer, `llvm-profdata`, `llvm-cov` and `unzip`: on Ubuntu, `apt install clang llvm unzip`. To run the riscv64 binaries yourself (`docs/build-contract.md`, "Run a binary"), you need `qemu-riscv64`: on Ubuntu, `apt install qemu-user`.
 
 ## 1. Ask what "correct" means
@@ -81,15 +83,31 @@ Write a small set of example inputs. Together, they must run each API call and e
 
 ### 3.4 Show that each property can fail
 
-For each property, find a distinguishing mutant:
+For each property, find a breakage: a one-line change that makes the property fail on an input of the seed corpus.
 
 1. Make a one-line change that breaks the property, in the library or in the fuzz target. For example, flip a comparison or remove an update.
 2. Rebuild the fuzz target of 3.3.
-3. Find an input that makes the fuzz target abort. Run the fuzz target as a fuzzer, or write the input by hand. A run of a few minutes is usually enough: for example, `./<target> -max_total_time=120 <directory>`.
-4. Undo the change.
-5. In the comment of the property, record the change and the input.
+3. Find an input that makes the fuzz target abort. Run the fuzz target as a fuzzer, or write the input by hand. A run of a few minutes is usually enough: for example, `./<target> -max_total_time=120 <directory>`. Add the input to the seed corpus.
+4. Undo the change, and record it in the comment of the property, with the input:
 
-A property that no change can make fail checks nothing. Write it again.
+       /* The checksum of the block closes.
+        * mutant: src/checksum.c:51 `return sum == 0;` -> `return 1;`
+        * input: corrupt-block */
+       if (!block_sums_to_zero(frame)) abort();
+
+   The path starts at the `WORKDIR` of the `Dockerfile`. The line is the line number at the commit that `repo` names. The old text occurs once on that line. `docs/build-contract.md`, "The checks of a fuzz target", gives the format.
+
+A property that no change can make fail checks nothing. Write it again. A stop that is not a property, for example `if (!buf) abort();` after a failed allocation, gets the line `not a property: <reason>` in its comment, in place of a record.
+
+A change of several lines can be a patch instead: save it with `git diff`, in one directory for all such patches, and set `mutants` in `project.yaml` to that directory ([docs/project-yaml.md](../../../docs/project-yaml.md#mutants)).
+
+**These checks run on each pull request.** The Build check measures steps 3.3 and 3.4 for a C or C++ project ([docs/build-contract.md](../../../docs/build-contract.md#the-checks-of-a-fuzz-target)). It builds the fuzz targets with coverage and runs each one on each seed input. Then it applies each breakage in turn, a `mutant:` record or a patch, builds again, and runs the seed inputs again. Then Claude reviews the fuzz targets with `.claude/skills/review-enrollment/SKILL.md`: whether each check tests what its comment says, in both directions, and whether a check takes its expected value from the library under test. The maintainer sees one comment on the pull request, which the next push replaces. It asks for each fix, and under it, the Build check's report lists:
+
+- each check `if (...) abort();` that no seed input reaches;
+- each `mutant:` record whose input does not make its check fire, and each breakage patch that no seed input catches;
+- each check that no breakage, record or patch, makes fire.
+
+To see the same report before you open the pull request, run `tools/check --no-shell --checks report.md <name>`. It needs `qemu-riscv64-static` on `PATH` ([docs/build-contract.md](../../../docs/build-contract.md#the-checks-of-a-fuzz-target) says how to get it).
 
 ### 3.5 Make each run end quickly
 
@@ -97,7 +115,7 @@ The decoding is total (3.1). Also bound each count, size and loop that comes fro
 
 ### 3.6 Depend only on the input
 
-The process model has one thread, and the input is its only data. Thus obey these rules:
+The statements use [Linux Process Semantics (LPS)](https://github.com/theorem-labs/rocq-linux-process-semantics), a formal model of a riscv64 Linux process. In LPS, a process has one thread, and the input is its only data. Thus obey these rules:
 
 - Do not start a thread.
 - Do not read a clock.
@@ -125,7 +143,16 @@ You can also return -1 to reject an input that is outside the domain of a proper
 
 In all other cases, return 0. Change each expected outcome into `return 0`, narrowly. Examine the library's error code, or catch the one exception type that the API documents.
 
-Give each file a header that tells what it is and its licence. A file copied from the project's repository keeps the project's licence and tells so.
+### 3.8 Give each file its licence lines
+
+Each file of code that you put in `projects/<name>/` (fuzz targets, `Dockerfile`, `build.sh`, scripts) begins with licence lines: comment lines that say whose the file is and under which licence. Only lines that must come first, such as `#!`, a Dockerfile `# syntax=` line or a Python `coding:` line, go above them. Build patches, `project.yaml`, `sources`, `series`, `patch_style.md`, locks and seed inputs need none. The maintainer is the author of the contribution: ask them which name and organisation to give. Use the first of these cases that fits:
+
+1. **A seeded project's file that you adopt unchanged**, from `tools/seeds/<name>/` or `projects/<name>/` of this repository: add nothing. [NOTICE](../../../NOTICE) and `tools/seeds/UPSTREAM-CARRIED.tsv` give its licence. A seeded file that you change is case 3: keep its licence lines, for example the Google header of a seeded Python fuzz target. If it has none, give the licence that `tools/seeds/UPSTREAM-CARRIED.tsv` names for it; if that file does not name it, give `Copyright 2026 Theorem Labs, PBC` and `SPDX-License-Identifier: Apache-2.0` (NOTICE). Keep the lines that NOTICE names by number (wazuh, mariadb) unchanged; NOTICE grants them wherever they are copied. Then add a `Modified` line. New build files written in the form of a seeded project's, as step 4 says for Rust, Python and Go, are case 4.
+2. **A file started from `templates/`, with no lines copied from elsewhere**: delete the template's comments and give it the lines of a file that the maintainer wrote (case 4), as `projects/cjson/Dockerfile` does. If it also holds lines copied from elsewhere, for example from an OSS-Fuzz `build.sh`, delete the template's comments and use case 3.
+3. **A file copied from elsewhere**, whole or in part: the project's repository, OSS-Fuzz, or another project. Keep its licence lines unchanged, for example the Google header of an OSS-Fuzz `build.sh`, as `tools/seeds/go-toml/build.sh` does. If it has none, add `SPDX-License-Identifier: <its licence>`, as the LICENSE and NOTICE of the repository it came from say, and a line with the URL and commit it came from; add a `Copyright` line only when that repository names the holder. If the file was changed, also add one line under its licence lines that says who changed it, when, and what changed in this file, as `tools/validate.py` does. For example: `Modified 2026 by Alex Doe: built with the OSS Verify builder.`
+4. **A file that the maintainer wrote**: `Copyright <year> <their name or organisation>` and `SPDX-License-Identifier: Apache-2.0`, as in `templates/build.sh`. A contribution is under the Apache License 2.0 ([CONTRIBUTING.md](../../../CONTRIBUTING.md)). If the project is under version 2 of the GNU GPL only (GPL-2.0-only), give `SPDX-License-Identifier: MIT OR Apache-2.0` instead, because GPL-2.0-only code cannot be linked with Apache-2.0 code ([NOTICE](../../../NOTICE)). For such a project, tell the maintainer that a fuzz target copied from OSS-Fuzz stays under Apache-2.0 and can keep its binaries from being published (NOTICE, wazuh and mariadb).
+
+Do not add a licence file, and do not change `LICENSE`, `LICENSES/` or `NOTICE`. In the pull request, say which files came from where. No check reads licence lines, so get them right before the maintainer opens the pull request.
 
 ## 4. Port the build
 
@@ -137,7 +164,7 @@ For a `python` project, the fuzz targets are atheris harnesses. Write the build 
 
 For a `go` project, the fuzz targets are its OSS-Fuzz Go fuzz targets, and `build.sh` is its OSS-Fuzz `build.sh`, as it is (`docs/build-contract.md`, "Go fuzz targets"). Write the build files in the form of a ported Go build, for example `tools/seeds/go-toml/`. Pin the modules in a `go.lock`, and get them with a `gomodules` line in `sources`. Leave out `sanitizers`, or give `sanitizers: []`.
 
-Copy `templates/Dockerfile` and `templates/build.sh` into `projects/<name>/`. Port the project's build (`docs/build-contract.md`). Two builds written by hand are small examples (`docs/build-contract.md`, "What the Dockerfile must do"): `projects/cjson/`, and the test project `tools/tests/fixtures/example/`. The other projects in `projects/` and `tools/seeds/` are mostly ports of a release build, which use the helpers of `release-target.sh`. For a `c` or `c++` project, do not copy their form for a new build.
+Copy `templates/Dockerfile` and `templates/build.sh` into `projects/<name>/`, and give them their licence lines (3.8). Port the project's build (`docs/build-contract.md`). Two builds written by hand are small examples (`docs/build-contract.md`, "What the Dockerfile must do"): `projects/cjson/`, and the test project `tools/tests/fixtures/example/`. The other projects in `projects/` and `tools/seeds/` are mostly ports of a release build, which use the helpers of `release-target.sh`. For a `c` or `c++` project, do not copy their form for a new build.
 
 - In the `Dockerfile`, start with `FROM ${BASE_BUILDER}`.
 - Declare `ARG REPO` and `ARG COMMIT`.
@@ -148,7 +175,7 @@ Copy `templates/Dockerfile` and `templates/build.sh` into `projects/<name>/`. Po
 - In `build.sh`, compile each fuzz target. Link it into `$OUT` with `$LIB_FUZZING_ENGINE`, through `$CC` or `$CXX`.
 - Make static riscv64 Linux programs. Do not use shared libraries, run a compiled program, use the network in `build.sh`, or strip a binary after the link.
 
-If a dependency needs a patch to build, make it a build patch in `projects/<name>/`. List it in `series`. A change that fixes a bug in the project is not a build patch. It never goes in the project directory.
+If a dependency needs a patch to build, add the patch to `projects/<name>/`, and list it in `series`. A change that fixes a bug in the project never goes in the project directory. If you adopt a seeded project, do step 2 of `docs/project-yaml.md`, "Seeded projects".
 
 ## 5. Write project.yaml
 
@@ -174,13 +201,13 @@ For `ubsan_checks`, suggest the default: it is the list of OSS-Fuzz for the proj
 2. Run `tools/check --no-shell --twice <name>`. Correct each problem.
 3. Make sure that the fuzz targets that `tools/check` finds in each build are those in `fuzz_targets`.
 4. Make sure that `tools/check` tells you that the second build has the same bytes.
-5. Make sure that each property has a coverage witness (3.3) and a distinguishing mutant (3.4).
+5. Make sure that each property has a coverage witness (3.3) and a breakage (3.4): a `mutant:` record or a patch. `tools/check --no-shell --checks report.md <name>` lists each check that misses one.
 
 ## 7. Prepare the pull request
 
 1. Make a branch that changes only `projects/<name>/`.
 2. Write the pull request description from `.github/PULL_REQUEST_TEMPLATE.md`.
-3. In the context note, give a summary of what each fuzz target checks, in a few lines.
+3. In the context note, give a summary of what each fuzz target checks, in a few lines, and say which files came from where (3.8).
 4. Optional: show the triage comment that the pull request will get: `python3 .github/scripts/triage.py --repo theorem-labs/oss-verify --local projects/<name> --login <maintainer's GitHub account> --body <a file holding the description>`. Without `GITHUB_TOKEN`, its GraphQL rows say "could not be checked".
 5. Show the branch and the description to the maintainer.
 6. Let the maintainer open the pull request. Only the maintainer can confirm "I am a core maintainer" and "I accept the OSS Verify terms".

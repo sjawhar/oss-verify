@@ -56,6 +56,7 @@ class Job:
     fuzz_targets: list | None  # None: every fuzz target the build produces
     ubsan_checks: list | None = None  # the UBSan checks in effect if the project changes them; None: the default
     language: str = "c"  # project.yaml's language, which chooses the toolchain
+    mutants: str | None = None  # project.yaml's mutants: the directory of breakage patches, from the image's WORKDIR
 
 
 _UNSAFE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
@@ -222,11 +223,22 @@ def image_id(tag):
     return output("docker", "image", "inspect", "--format", "{{.Id}}", tag).strip()
 
 
+def require_buildkit():
+    """Refuse to start when `docker build` refuses `--progress=plain`, which tools/check gives each build. Docker 23 and
+    later refuse it with the legacy builder: without the buildx plugin (Ubuntu's docker.io package alone), or with
+    DOCKER_BUILDKIT set to a false value. The probe asks for the help text, so it builds nothing."""
+    if run("docker", "build", "--progress=plain", "--help", quiet=True) != 0:
+        raise Failed("tools/check needs Docker with BuildKit, and `docker build --progress=plain --help` fails. "
+                     "Install the buildx plugin (on Ubuntu, `apt install docker-buildx`; from Docker's own "
+                     "repository, `docker-buildx-plugin`), unset DOCKER_BUILDKIT, then run tools/check again.")
+
+
 def build_builder(image=None, suffix="", no_cache=False):
     """Build the builder image from infra/base-builder, FROM the toolchain `image` (the newest for C if None). Return
     its tag."""
     image = image or newest_toolchain()
     tag = f"oss-verify-base-builder:{tree_hash(BUILDER_DIR)[:16]}-{toolchain_id(image)}{suffix}"
+    require_buildkit()
     step(f"docker build: the builder ({tag}), FROM {image}")
     cache = ["--no-cache"] if no_cache else []
     if run("docker", "build", "--progress=plain", *cache, "--build-arg", f"TOOLCHAIN={image}", "-t", tag,
