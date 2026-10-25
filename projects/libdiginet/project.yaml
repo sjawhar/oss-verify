@@ -2,7 +2,7 @@
 # (EtherType 0x885F), for FreeMixer. The fuzz targets drive the readers of every byte a desk sends: the frame, the
 # command stream, the controls in it and the session they drive. Pinned to the head of FreeMixer/libdiginet#28, the
 # fuzz/ written to the OSS Verify contract; it is pinned again to its merge or release tag.
-repo: https://github.com/FreeMixer/libdiginet#3da810b9702a4f742bbd3fc1a23ca3c1bb34bf08
+repo: https://github.com/FreeMixer/libdiginet#293a4704b01b3cf96f457b934856ad4f43c75c46
 primary_contact: linuxnow@gmail.com
 homepage: https://github.com/FreeMixer/libdiginet
 language: c
