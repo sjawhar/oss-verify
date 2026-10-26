@@ -2,7 +2,7 @@
 # untrusted input it parses itself, beside the REAC frames libreac parses: the operator's config file and `--box` pin,
 # the three control writes a PipeWire client sets on a node, and the two rtnetlink replies it reads. Pinned to the
 # head of FreeREAC/reac-pw#43, the fuzz/ of FreeREAC/reac-pw#37; it is pinned again to its merge or release tag.
-repo: https://github.com/FreeREAC/reac-pw#42579402b83c57ca65fe90f49a2d1298fee91923
+repo: https://github.com/FreeREAC/reac-pw#d500a34a6549b27ae1c3d28feaa27382be5894e0
 primary_contact: linuxnow@gmail.com
 homepage: https://github.com/FreeREAC/reac-pw
 language: c
